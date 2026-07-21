@@ -1,7 +1,9 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import numpy as np
 import plotly.graph_objects as go
+import pyarrow
 
 # Set page configuration
 st.set_page_config(page_title="Retail Sales Intelligence App", layout="wide")
@@ -22,14 +24,26 @@ if uploaded_sales and uploaded_master:
     # Perform Merge on 'StoreID'
     # Ensure column names match; assuming input files have 'StoreID'
     # df = pd.merge(df_sales, df_master, on="storeid", how="left")
-    df = pd.merge(
-    df_sales,
-    df_master,
-    on="store_id",
-    how="left",
-    suffixes=("", "_master")
-    )
-    st.write(df.dtypes)
+    # df = pd.merge(
+    # df_sales,
+    # df_master,
+    # on="store_id",
+    # how="left",
+    # suffixes=("", "_master")
+    # )
+    df = df_sales.copy()
+    df["week_start_date"] = pd.to_datetime(
+        df["week_start_date"],
+        format="%d-%m-%Y",
+        errors="coerce"
+    ).astype('datetime64[ns]')
+
+    df_types = pd.DataFrame({
+        "Column": df.columns,
+        "Data Type": df.dtypes.astype(str)
+    })
+    with st.expander("Column data types", expanded=False):
+        st.table(df_types)
 
     numeric_columns = [
     "footfall",
@@ -49,29 +63,39 @@ if uploaded_sales and uploaded_master:
     for col in numeric_columns:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    df["Target_Achievement"] = (
-        df["net_sales"] / df["sales_target"]
-    ) * 100
 
-    df["ATV"] = (
-        df["net_sales"] / df["transactions"]
+    df["Target_Achievement"] = np.where(
+        df["sales_target"] > 0,
+        (df["net_sales"] / df["sales_target"]) * 100,
+        0
     )
 
-    df["Return_Rate"] = (
-        df["returns_amount"] / df["net_sales"]
-    ) * 100
+    df["ATV"] = np.where(
+        df["transactions"] > 0,
+        df["net_sales"] / df["transactions"],
+        0
+    )
 
-    df["Discount_Rate"] = (
-        df["discount_amount"] / df["gross_sales"]
-    ) * 100
+    df["Return_Rate"] = np.where(
+        df["net_sales"] > 0,
+        (df["returns_amount"] / df["net_sales"]) * 100,
+        0
+    )
+
+    df["Discount_Rate"] = np.where(
+        df["gross_sales"] > 0,
+        (df["discount_amount"] / df["gross_sales"]) * 100,
+        0
+    )
     # --- Sidebar Filters ---
     st.sidebar.header("Dashboard Filters")
     
     # Generate filter lists based on available data
+    week_options  = sorted(df["week_start_date"].dropna().unique())
     weeks = st.sidebar.multiselect(
     "Select Week",
-    options=df["week_start_date"].unique(),
-    default=df["week_start_date"].unique()
+    options=week_options,
+    default=week_options
     )
 
     regions = st.sidebar.multiselect(
@@ -99,9 +123,9 @@ if uploaded_sales and uploaded_master:
     )
 
     categories = st.sidebar.multiselect(
-    "Select Product product_category",
-    options=df["product_category"].unique(),
-    default=df["product_category"].unique()
+        "Select Product Category",
+        options=df["product_category"].unique(),
+        default=df["product_category"].unique()
     )
 
     # Apply Filters
@@ -135,19 +159,19 @@ if uploaded_sales and uploaded_master:
     with row1_c1:
         fig_trend = px.line(df_filtered.groupby('week_start_date')['net_sales'].sum().reset_index(), 
                             x='week_start_date', y='net_sales', title="Weekly Net Sales Trend")
-        st.plotly_chart(fig_trend, use_container_width=True)
+        st.plotly_chart(fig_trend, width="stretch")
 
     # 2. Sales by Region (Bar Chart)
     with row1_c2:
         fig_region = px.bar(df_filtered.groupby('region')['net_sales'].sum().reset_index(), 
                             x='region', y='net_sales', title="Net Sales by Region")
-        st.plotly_chart(fig_region, use_container_width=True)
+        st.plotly_chart(fig_region, width="stretch")
 
     # 3. product_category Performance (Treemap)
     with row2_c1:
         fig_cat = px.treemap(df_filtered, path=['product_category'], values='net_sales', 
                              title="product_category Performance (Net Sales)")
-        st.plotly_chart(fig_cat, use_container_width=True)
+        st.plotly_chart(fig_cat, width="stretch")
 
     # 4. Top Stores Leaderboard
     with row2_c2:
@@ -155,10 +179,10 @@ if uploaded_sales and uploaded_master:
         fig_leader = px.bar(top_stores, x='net_sales', y='store_name', orientation='h', 
                             title="Top 10 Performing Stores")
         fig_leader.update_yaxes(categoryorder='total ascending')
-        st.plotly_chart(fig_leader, use_container_width=True)
+        st.plotly_chart(fig_leader, width="stretch")
 
     # --- Business Insights Section ---
-    st.subheader("Business Insights")
+    st.subheader("Business Insights")   
     
     # Logic: Regions missing targets (Achievement < 100%)
     region_perf = df_filtered.groupby('region')['Target_Achievement'].mean().reset_index()
